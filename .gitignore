@@ -1,0 +1,36 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+venv/
+env/
+
+# IDE settings
+.vscode/
+.idea/
+
+# Testing and Type Checking
+.coverage
+htmlcov/
+.mypy_cache/
+.pytest_cache/
+
+# Environment variables
+.env
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Project specific
+*.csv
+!122639.csv
+.!amfi_navall.csv
+
+
