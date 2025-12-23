@@ -1,6 +1,6 @@
 # 📈 cagrx
 
-![Status](https://img.shields.io/badge/status-work--in--progress-orange) ![Python](https://img.shields.io/badge/python-3.12%2B-blue)
+![Status](https://img.shields.io/badge/status-work--in--progress-orange) ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
 
 > **No Cap, only CAGR – Calculate Mutual fund Returns Like a Pro**
 
@@ -11,7 +11,7 @@
 > [!WARNING]
 > **Work in Progress**: This library is under active development. APIs may change, and some features are still being refined. Contributions and feedback are welcome!
 
-**CagrX** is a powerful Python library that simplifies access to AMFI (Association of Mutual Funds in India) data. Whether you're building a fintech app, conducting investment research, or analyzing portfolio performance, cagrx provides the tools you need to work with mutual fund data effortlessly.
+**CagrX** is a powerful Python library to analyze mutual funds using AMFI (Association of Mutual Funds in India) data. Whether you're building a fintech app, conducting investment research, or analyzing portfolio performance, cagrx provides the tools you need to work with mutual fund data effortlessly.
 
 ## ✨ Features
 
@@ -46,7 +46,7 @@ pip install pandas requests
 
 ## 📦 Requirements
 
-- Python >= 3.12
+- Python >= 3.9
 - pandas
 - requests
 
