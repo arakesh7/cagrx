@@ -27,21 +27,18 @@
 
 ## 🚀 Installation
 
-> [!NOTE]
-> This library is not yet published to PyPI. Install from source for now.
+**Install via pip:**
 
-**Install from source:**
+```bash
+pip install cagrx
+```
+
+**Or install from source:**
 
 ```bash
 git clone https://github.com/yourusername/cagrx.git
 cd cagrx
 pip install -e .
-```
-
-**Or install dependencies manually:**
-
-```bash
-pip install pandas requests
 ```
 
 ## 📦 Requirements

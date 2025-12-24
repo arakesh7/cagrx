@@ -1,10 +1,27 @@
 [project]
 name = "cagrx"
-version = "0.1.0"
+version = "0.1.1"
 description = "A Python library to calculate return metrics like CAGR, XIRR, and SIP returns using AMFI data"
 readme = "README.md"
 requires-python = ">=3.9"
-dependencies = []
+license = {text = "MIT"}
+authors = [
+  {name = "Your Name", email = "your.email@example.com"},
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "pandas",
+    "requests",
+]
+
+[project.urls]
+Homepage = "https://github.com/yourusername/cagrx"
+Repository = "https://github.com/yourusername/cagrx"
+Issues = "https://github.com/yourusername/cagrx/issues"
 
 [project.scripts]
 cagrx = "cagrx:main"
