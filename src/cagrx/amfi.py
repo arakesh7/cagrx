@@ -72,35 +72,77 @@ class Amfi:
 
         return self._create_dataframe(nav_records)
 
+    _SCHEME_COLUMNS = ["scheme_code", "isin_growth", "isin_reinv", "scheme_name", "plan", "option", "nav", "date", "fund_house"]
+
     def _get_schemes_from_amfi(self):
         """
-        Get all schemes from the AMFI list
-        
-        :returns: pandas dataframe containing all schemes
-        """
-        # Fetch data
-        raw_lines = self._fetch_raw_nav_lines()
-        
-        current_fund_house = None
-        lines = []
-        
-        for line in raw_lines[1:]: #skip first line containing headers
-            line = line.strip()
+        Fetch and parse all schemes from the AMFI NAVAll.txt feed.
 
-            if line.endswith("Mutual Fund"):
-                current_fund_house = line #if the current line is fund house name, store it and skip the iteration
+        Handles both the current 8-field format and the legacy 6-field format:
+          - Current : scheme_code; isin_growth; isin_reinv; scheme_name; plan; option; nav; date
+          - Legacy  : scheme_code; isin_growth; isin_reinv; scheme_name; nav; date
+
+        :returns: DataFrame with columns defined in _SCHEME_COLUMNS
+        """
+        raw_lines = self._fetch_raw_nav_lines()
+        current_fund_house = None
+        records = []
+
+        for line in raw_lines[1:]:  # row 0 is the header
+            line = line.strip()
+            if not line:
                 continue
 
-            row = line.split(";")
-            if len(row) < 5:
-                continue #skip invalid or header lines
-            
-            row.append(current_fund_house)
-            lines.append(row)
+            if line.endswith("Mutual Fund"):
+                current_fund_house = line
+                continue
 
-        columns = ["scheme_code", "isin_growth", "isin_reinv", "scheme_name", "nav", "date", "fund_house"]
+            row = [field.strip() for field in line.split(";")]
+            record = self._parse_scheme_row(row, current_fund_house)
+            if record:
+                records.append(record)
 
-        return pd.DataFrame(lines, columns=columns)
+        return pd.DataFrame(records, columns=self._SCHEME_COLUMNS)
+
+    def _parse_scheme_row(self, row: list, fund_house: str) -> list | None:
+        """
+        Parse a single semicolon-split AMFI row into a normalised record.
+
+        :param row: list of stripped fields from one line of NAVAll.txt
+        :param fund_house: the fund house name currently in scope
+        :returns: a list aligned to _SCHEME_COLUMNS, or None if the row is invalid
+        """
+        MIN_FIELDS = 5
+        if len(row) < MIN_FIELDS:
+            return None
+
+        scheme_code, isin_growth, isin_reinv = row[0], row[1], row[2]
+
+        if len(row) == 8:
+            # Current AMFI format (8 fields)
+            base_name, plan, option, nav, date = row[3], row[4], row[5], row[6], row[7]
+            scheme_name = self._build_scheme_name(base_name, plan, option)
+        else:
+            # Legacy AMFI format (6 fields) — no plan/option columns
+            base_name, plan, option = row[3], "", ""
+            nav, date = row[-2], row[-1]
+            scheme_name = base_name
+
+        return [scheme_code, isin_growth, isin_reinv, scheme_name, plan, option, nav, date, fund_house]
+
+    @staticmethod
+    def _build_scheme_name(base_name: str, plan: str, option: str) -> str:
+        """
+        Build a human-readable scheme name from its components.
+
+        Filters out empty strings and bare hyphens before joining so that
+        e.g. ("Edelweiss Mid Cap Fund", "Direct Plan", "Growth") becomes
+        "Edelweiss Mid Cap Fund - Direct Plan - Growth".
+
+        :returns: combined scheme name string
+        """
+        parts = [p for p in [base_name, plan, option] if p and p != "-"]
+        return " - ".join(parts) if parts else base_name
 
     def _fetch_historical_nav(self, scheme_id, from_date, to_date):
         """ 

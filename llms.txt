@@ -1,0 +1,236 @@
+# cagrx
+
+> Python library for downloading and analysing Indian mutual fund NAV data from AMFI (Association of Mutual Funds in India).
+
+Source: https://github.com/arakesh7/cagrx
+Install: `pip install cagrx`
+Requires: Python >= 3.9, pandas, requests
+
+---
+
+## Core Concepts
+
+- **scheme_code**: A string integer (e.g. `"118989"`) that uniquely identifies one mutual fund scheme-plan-option combination on AMFI. Must be discovered via `Amfi.list_all_schemes()` -- it is NOT the ISIN.
+- **NAV DataFrame**: All historical data is returned as a `pandas.DataFrame` with a `DatetimeIndex` named `"date"` and at minimum a `float` column named `"nav"`. The index name `"date"` is required by `calculate_rolling_returns()`.
+- **Return values are decimals**: All CAGR/return functions return decimals, not percentages. `0.12` means 12%. Multiply by 100 for display.
+- **Caching**: `Amfi()` writes `amfi_navall.csv` to the **current working directory** on first run, and reads from it on subsequent runs. Call `amfi.refresh_schemes()` to force a re-download.
+
+---
+
+## Module: cagrx.amfi
+
+### Class: `Amfi`
+
+```python
+from cagrx.amfi import Amfi
+amfi = Amfi()
+```
+
+On instantiation, loads scheme list from `./amfi_navall.csv` if it exists, otherwise fetches from AMFI and creates the cache file.
+
+---
+
+#### `Amfi.list_all_schemes() -> pd.DataFrame`
+
+Returns all AMFI schemes as a DataFrame.
+
+Columns:
+- scheme_code (str): Unique AMFI scheme identifier (use this for get_nav_history)
+- isin_growth (str): ISIN for growth/dividend payout option
+- isin_reinv (str): ISIN for dividend reinvestment option ("-" if not applicable)
+- scheme_name (str): Full name including plan and option e.g. "HDFC Mid Cap Fund - Direct Plan - Growth Option"
+- plan (str): "Direct Plan" or "Regular Plan" (empty string for legacy format)
+- option (str): "Growth Option", "IDCW Option", etc. (empty string for legacy format)
+- nav (str): Current NAV as string (not cast to float in this DataFrame)
+- date (str): Date of current NAV
+- fund_house (str): Fund house name e.g. "HDFC Mutual Fund"
+
+---
+
+#### `Amfi.get_schemes_by_fund_house(fund_house: str) -> pd.DataFrame`
+
+Filters list_all_schemes() to a specific fund house.
+- fund_house must exactly match a value from Amfi.get_fund_houses().
+- Returns DataFrame with columns scheme_code, scheme_name only.
+
+```python
+schemes = amfi.get_schemes_by_fund_house("HDFC Mutual Fund")
+```
+
+---
+
+#### `Amfi.get_fund_houses() -> set[str]`
+
+Returns a set of all unique fund house name strings.
+
+---
+
+#### `Amfi.get_nav_history(scheme_id: str, start_date: str, end_date: str) -> pd.DataFrame`
+
+Downloads historical NAV data for a single scheme.
+- scheme_id: The scheme_code string from list_all_schemes().
+- start_date, end_date: Strings in "YYYY-MM-DD" format.
+- Internally splits the range into 5-year chunks (AMFI API limit) and fetches sequentially.
+- Returns DataFrame with DatetimeIndex named "date", column nav (float), plus extra AMFI metadata columns (upload_time, Plan, Option, etc.).
+
+```python
+nav_df = amfi.get_nav_history("118989", "2020-01-01", "2026-09-01")
+# nav_df.index.name == "date"  <- required by calculate_rolling_returns
+# nav_df["nav"]                <- float NAV values
+```
+
+---
+
+#### `Amfi.refresh_schemes() -> pd.DataFrame`
+
+Force re-fetches the full scheme list from AMFI and overwrites the local CSV cache.
+
+---
+
+## Module: cagrx.return_metrics
+
+All functions expect a pd.DataFrame with a DatetimeIndex and a nav column (float), sorted ascending.
+
+---
+
+#### `cagr(df, column="nav") -> float`
+
+Overall CAGR from the first to the last row of df. Does not sort -- caller must ensure ascending order.
+
+```python
+from cagrx.return_metrics import cagr
+rate = cagr(nav_df)  # e.g. 0.172 -> 17.2%
+```
+
+---
+
+#### `calculate_trailing_cagr(df, column="nav", periods=None) -> dict`
+
+Calculates CAGR over multiple trailing periods from the most recent date in df.
+- periods: List of ints (years). Use -1 for max available history. Default: [1, 3, 5].
+- Returns dict with keys like "1Y_CAGR", "3Y_CAGR", "5Y_CAGR", "Max_CAGR".
+  Value is float or None if insufficient history for that period.
+
+```python
+from cagrx.return_metrics import calculate_trailing_cagr
+result = calculate_trailing_cagr(nav_df, periods=[1, 3, 5, -1])
+# {"1Y_CAGR": 0.06, "3Y_CAGR": 0.172, "5Y_CAGR": 0.193, "Max_CAGR": 0.17}
+```
+
+---
+
+#### `calculate_rolling_returns(df, column="nav", period=pd.DateOffset(years=1)) -> dict`
+
+Computes rolling ANNUALISED CAGR over a sliding window.
+Results from different window lengths (1Y, 3Y, 5Y) are directly comparable.
+
+Formula per row: (nav_end / nav_start) ^ (1 / years) - 1
+
+IMPORTANT: df.index.name MUST equal "date". If get_nav_history() is used, this is set
+automatically. If you construct a DataFrame manually, set df.index.name = "date".
+
+- period: A pd.DateOffset. Default is 1 year. The .n attribute is used to derive the
+  window length in years for annualisation (e.g. DateOffset(years=3) -> 3 years).
+
+Return dict keys:
+- max_returns (float): Highest annualised rolling return observed
+- max_return_period (tuple[str, str]): (start_date, end_date) of the best window
+- min_returns (float): Lowest annualised rolling return observed
+- min_return_period (tuple[str, str]): (start_date, end_date) of the worst window
+- avg_return (float): Mean annualised rolling return across all windows
+
+All values are decimals: 0.18 means 18% p.a.
+
+```python
+from cagrx.return_metrics import calculate_rolling_returns
+import pandas as pd
+
+nav_df.index.name = "date"  # ensure this is set
+r1 = calculate_rolling_returns(nav_df, period=pd.DateOffset(years=1))
+r3 = calculate_rolling_returns(nav_df, period=pd.DateOffset(years=3))
+# r1["avg_return"] and r3["avg_return"] are now directly comparable (both annualised)
+# e.g. r1["avg_return"] = 0.20 (20% p.a.), r3["avg_return"] = 0.23 (23% p.a.)
+```
+
+---
+
+#### `calculate_sip_returns(sip_cashflows, nav_df, column="nav") -> dict`
+
+Calculates returns for a SIP using actual units purchased at each instalment date.
+Uses xirr() internally for accurate annualised return.
+
+- sip_cashflows: pd.DataFrame with a DatetimeIndex and column named "amount" (float, investment in INR).
+- nav_df: NAV DataFrame from get_nav_history().
+- SIP dates on holidays/weekends are matched to the NEXT available trading day's NAV (direction='forward').
+
+Return dict keys:
+- total_invested (float): Sum of all SIP instalments
+- current_value (float): Total units x latest NAV
+- absolute_returns (float): current_value - total_invested
+- return_percentage (float): Absolute return as percentage of invested
+- "annualized_return (xirr %)" (float | None): XIRR-based annualised return in percent; None if XIRR fails to converge
+- total_units (float): Total units accumulated
+- current_nav (float): Latest NAV used for valuation
+- investment_period_days (int): Days from first instalment to last NAV date
+
+NOTE: The return key is literally the string "annualized_return (xirr %)" including spaces and parentheses.
+
+```python
+from cagrx.return_metrics import calculate_sip_returns
+
+sip = pd.DataFrame({"amount": [5000] * 36},
+                   index=pd.date_range("2023-01-01", periods=36, freq="MS"))
+result = calculate_sip_returns(sip, nav_df)
+print(result["annualized_return (xirr %)"])  # e.g. 18.4
+```
+
+---
+
+#### `xirr(cashflows: list, dates: list, guess=0.1, max_iterations=100, tolerance=1e-6) -> float`
+
+Extended Internal Rate of Return using Newton-Raphson. For direct use in custom cash-flow analysis.
+
+- Convention: Outflows (investments) are NEGATIVE, inflows (redemptions) are POSITIVE.
+- Requires at least 2 cash flows.
+- Returns decimal rate (e.g. 0.15 = 15%). Raises ValueError if it fails to converge.
+
+```python
+from cagrx.return_metrics import xirr
+
+cashflows = [-10000, -10000, -10000, 38000]
+dates = pd.to_datetime(["2021-01-01", "2022-01-01", "2023-01-01", "2024-01-01"])
+rate = xirr(cashflows, dates)  # e.g. 0.2156 -> 21.56%
+```
+
+---
+
+## Data Sources (AMFI)
+
+- Scheme list:   https://www.amfiindia.com/spages/NAVAll.txt
+- Historical NAV: https://www.amfiindia.com/api/nav-history
+
+---
+
+## Known Gotchas
+
+1. INDEX NAME: calculate_rolling_returns() crashes with KeyError if df.index.name != "date".
+   Always verify after manually constructing a DataFrame.
+
+2. CACHE LOCATION: amfi_navall.csv is written to the process's current working directory,
+   not a user config dir. This can pollute project folders.
+
+3. NAV IN list_all_schemes(): The nav column is a str (not float).
+   Cast with pd.to_numeric() if needed.
+
+4. AMFI RATE LIMITING: Fetching many schemes' histories in a tight loop may get throttled.
+   Add delays or cache results locally.
+
+5. ROLLING RETURNS ARE ANNUALISED CAGR: calculate_rolling_returns() returns annualised
+   figures -- (nav_end/nav_start)^(1/years) - 1. Windows of different lengths are
+   directly comparable. avg_return=0.23 always means 23% per year regardless of period.
+
+6. scheme_code IS NOT THE ISIN: Use scheme_code (e.g. "118989") for get_nav_history(),
+   not the ISIN strings from isin_growth or isin_reinv.
+
+7. ANNUALIZED_RETURN KEY NAME: The key in the calculate_sip_returns() result dict is
+   exactly "annualized_return (xirr %)" -- not "annualized_return".

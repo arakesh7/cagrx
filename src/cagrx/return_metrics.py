@@ -35,6 +35,9 @@ def calculate_trailing_cagr(df, column="nav", periods=None):
     """
     if column not in df.columns:
         raise ValueError(f"Column '{column}' not found in DataFrame")
+
+    if periods is None:
+        periods = [1, 3, 5] 
     
     df = df.sort_index()
     cagr_metrics = {}
@@ -58,35 +61,54 @@ def calculate_trailing_cagr(df, column="nav", periods=None):
     
 def calculate_rolling_returns(df, column="nav", period=pd.DateOffset(years=1)):
     """
-    Calculate the rolling returns for the given column over the DataFrame's period.
-    
-    :param df: DataFrame with datetime index
+    Calculate the rolling annualised CAGR for the given column over a sliding window.
+
+    Each data point's return is annualised using the CAGR formula so that results
+    from windows of different lengths (1Y, 3Y, 5Y) are directly comparable.
+
+      annualised_return = (nav_end / nav_start) ^ (1 / years) - 1
+
+    :param df: DataFrame with datetime index named "date"
     :param column: Column name to calculate rolling returns on (default: 'nav')
-    :param period: Period to calculate rolling returns for (default: 1 year)
-    :returns Rolling returns as a float (e.g., 0.12 for 12% annualized growth)
+    :param period: Window length as a pd.DateOffset (default: 1 year)
+    :returns: dict with keys max_returns, max_return_period, min_returns,
+              min_return_period, avg_return -- all as annualised decimals
+              (e.g. 0.18 means 18% p.a.)
     """
+    # Derive the window length in years from the DateOffset so we can annualise.
+    # DateOffset(years=n) stores n in the .n attribute; fall back to 1 for
+    # offsets that don't expose it (e.g. MonthEnd).
+    # DateOffset stores the year count in kwds['years'] when constructed as
+    # DateOffset(years=n). The .n attribute is always 1 for this form.
+    # Fall back to 1 so that non-year offsets (e.g. MonthEnd) still work.
+    years = period.kwds.get('years', 1) if hasattr(period, 'kwds') else 1
+
     df = df.copy()[[column]]
     dates_in_df = df.index.date
     df['past_date'] = dates_in_df - period
-    
+
     rolling_df = pd.merge_asof(df, df[['nav']], left_on='past_date', right_on='date', suffixes=('_current', '_past'))
     rolling_df['past_date'] = rolling_df['past_date'].dt.date
     rolling_df.index = dates_in_df
 
-    #drop rows where historical data for past dates are not available
+    # Drop rows where historical data for past dates are not available
     rolling_df = rolling_df.dropna(subset=['nav_past'])
-    rolling_df['returns'] = ((rolling_df['nav_current'] - rolling_df['nav_past']) /  rolling_df['nav_past']).round(3)
-    
-    max_row  = rolling_df.loc[rolling_df['returns'].idxmax()]
-    min_row  = rolling_df.loc[rolling_df['returns'].idxmin()]
+
+    # Annualise using CAGR formula: (end/start)^(1/years) - 1
+    rolling_df['returns'] = (
+        (rolling_df['nav_current'] / rolling_df['nav_past']) ** (1 / years) - 1
+    ).round(4)
+
+    max_row = rolling_df.loc[rolling_df['returns'].idxmax()]
+    min_row = rolling_df.loc[rolling_df['returns'].idxmin()]
     metrics = {
         'max_returns': float(max_row['returns']),
         'max_return_period': (str(max_row['past_date']), str(max_row.name)),
         'min_returns': float(min_row['returns']),
         'min_return_period': (str(min_row['past_date']), str(min_row.name)),
-        'avg_return': float(rolling_df['returns'].mean().round(3))
+        'avg_return': float(rolling_df['returns'].mean().round(4))
     }
-    
+
     return metrics
 
 def xirr(cashflows, dates, guess=0.1, max_iterations=100, tolerance=1e-6):
@@ -194,7 +216,6 @@ def calculate_sip_returns(sip_cashflows, nav_df, column="nav"):
         direction='forward' 
     )
     
-    print(merged)
     # Calculate units purchased at each SIP date
     merged['units'] = merged['amount'] / merged[column]
     
@@ -212,26 +233,31 @@ def calculate_sip_returns(sip_cashflows, nav_df, column="nav"):
     absolute_returns = current_value - total_invested
     return_percentage = (absolute_returns / total_invested) * 100 if total_invested > 0 else 0
     
-    # Calculate annualized returns (XIRR approximation using simple CAGR)
-    if len(sip_cashflows) > 1:
-        # Time period from first investment to last NAV date
-        days = (nav_df.index[-1] - sip_cashflows.index[0]).days
-        years = days / 365.25
-        
-        if years > 0 and total_invested > 0:
-            # Simple annualized return approximation
-            annualized_return = ((current_value / total_invested) ** (1 / years) - 1) * 100
-        else:
-            annualized_return = 0
-    else:
-        annualized_return = 0
-    
+    # Calculate annualized returns using XIRR.
+    # XIRR is the correct measure for SIPs because each instalment has been
+    # invested for a different duration; simple CAGR on the total corpus
+    # does not account for this and materially understates the true return.
+    #
+    # Cash-flow convention: investments are negative (money leaving wallet),
+    # the final portfolio value is positive (money coming back).
+    investment_cashflows = [-amount for amount in merged['amount']]
+    investment_dates     = list(merged.index)
+
+    cashflows_for_xirr = investment_cashflows + [current_value]
+    dates_for_xirr     = investment_dates     + [nav_df.index[-1]]
+
+    try:
+        xirr_rate = xirr(cashflows_for_xirr, dates_for_xirr)
+        annualized_return = round(xirr_rate * 100, 2)
+    except (ValueError, ZeroDivisionError):
+        annualized_return = None
+
     return {
         'total_invested': round(total_invested, 2),
         'current_value': round(current_value, 2),
         'absolute_returns': round(absolute_returns, 2),
         'return_percentage': round(return_percentage, 2),
-        'annualized_return': round(annualized_return, 2),
+        'annualized_return (xirr %)': annualized_return,
         'total_units': round(total_units, 4),
         'current_nav': round(current_nav, 2),
         'investment_period_days': (nav_df.index[-1] - sip_cashflows.index[0]).days if len(sip_cashflows) > 0 else 0
