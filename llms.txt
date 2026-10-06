@@ -87,6 +87,42 @@ Force re-fetches the full scheme list from AMFI and overwrites the local CSV cac
 
 ---
 
+#### `Amfi.search_schemes(query: str, limit: int = 10, plan: str = None, option: str = None, fund_house: str = None) -> list[dict]`
+
+Searches across all schemes by keywords or scheme code. Supports case-insensitive `plan` ("direct", "regular") and `option` ("growth", "idcw") filters.
+
+```python
+matches = amfi.search_schemes("Parag Parikh Flexi", limit=5)
+```
+
+---
+
+#### `Amfi.resolve_scheme(scheme: str | int, plan: str = None, option: str = None) -> str`
+
+Resolves a scheme code or fund name string to an exact scheme_code string.
+- If scheme is already a valid scheme code: returns it directly.
+- If multiple funds match: filters by plan/option. If still ambiguous, raises `MultipleSchemesFoundError` with matching candidates attached in `e.matches`.
+- If no funds match: raises `SchemeNotFoundError`.
+
+```python
+scheme_code = amfi.resolve_scheme("Parag Parikh Flexi Cap", plan="direct", option="growth")
+# "122639"
+```
+
+---
+
+#### Scheme-Aware Analytics Methods on `Amfi`
+
+All methods accept either a numeric `scheme_code` (str/int) or a fund name query with optional `plan` and `option`. They resolve the scheme, fetch historical NAV data automatically, and delegate to the calculation engine:
+
+- `amfi.trailing_cagr(scheme, periods=[1, 3, 5], plan=None, option=None) -> dict`
+- `amfi.rolling_returns(scheme, period=None, years=1, plan=None, option=None) -> dict` (accepts `years=3` or `pd.DateOffset(years=3)`)
+- `amfi.drawdown(scheme, start_date=None, end_date=None, plan=None, option=None) -> dict`
+- `amfi.sip_returns(scheme, monthly_amount: float, start_date: str, end_date: str = None, plan=None, option=None) -> dict`
+- `amfi.cagr(scheme, start_date=None, end_date=None, plan=None, option=None) -> float`
+
+---
+
 ## Module: cagrx.return_metrics
 
 All functions expect a pd.DataFrame with a DatetimeIndex and a nav column (float), sorted ascending.
@@ -109,12 +145,21 @@ rate = cagr(nav_df)  # e.g. 0.172 -> 17.2%
 Calculates CAGR over multiple trailing periods from the most recent date in df.
 - periods: List of ints (years). Use -1 for max available history. Default: [1, 3, 5].
 - Returns dict with keys like "1Y_CAGR", "3Y_CAGR", "5Y_CAGR", "Max_CAGR".
+  When -1 is included, also includes "Max_CAGR_start_date", "Max_CAGR_end_date", and "Max_CAGR_years".
   Value is float or None if insufficient history for that period.
 
 ```python
 from cagrx.return_metrics import calculate_trailing_cagr
 result = calculate_trailing_cagr(nav_df, periods=[1, 3, 5, -1])
-# {"1Y_CAGR": 0.06, "3Y_CAGR": 0.172, "5Y_CAGR": 0.193, "Max_CAGR": 0.17}
+# {
+#     "1Y_CAGR": 0.06,
+#     "3Y_CAGR": 0.172,
+#     "5Y_CAGR": 0.193,
+#     "Max_CAGR": 0.17,
+#     "Max_CAGR_start_date": "2013-05-24",
+#     "Max_CAGR_end_date": "2024-10-06",
+#     "Max_CAGR_years": 11.37
+# }
 ```
 
 ---
@@ -200,6 +245,36 @@ from cagrx.return_metrics import xirr
 cashflows = [-10000, -10000, -10000, 38000]
 dates = pd.to_datetime(["2021-01-01", "2022-01-01", "2023-01-01", "2024-01-01"])
 rate = xirr(cashflows, dates)  # e.g. 0.2156 -> 21.56%
+```
+
+---
+
+## Module: cagrx.risk_metrics
+
+#### `calculate_drawdown(df, column="nav", round_digits=3) -> dict`
+
+Computes the Maximum Drawdown (MDD), peak-to-trough dates, and recovery metrics.
+Aliases: `calculate_max_drawdown`, `max_drawdown`.
+(Also re-exported from `cagrx.return_metrics` for backward-compatibility).
+
+Return dict keys:
+- max_drawdown (float): Peak-to-trough drop as a decimal (e.g. -0.327 means -32.7%)
+- drawdown_start (str): "YYYY-MM-DD" peak date preceding the maximum drawdown
+- drawdown_end (str): "YYYY-MM-DD" trough date where the fund bottomed out
+- recovery_date (str | None): "YYYY-MM-DD" date when NAV first reached or exceeded the peak, or None if unrecovered
+- recovery_days (int | None): Calendar days between trough date (`drawdown_end`) and `recovery_date`, or None
+
+```python
+from cagrx.risk_metrics import calculate_drawdown
+
+result = calculate_drawdown(nav_df)
+# {
+#     "max_drawdown": -0.327,
+#     "drawdown_start": "2021-01-15",
+#     "drawdown_end": "2021-06-20",
+#     "recovery_date": "2022-02-10",
+#     "recovery_days": 235
+# }
 ```
 
 ---

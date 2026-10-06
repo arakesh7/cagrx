@@ -1,9 +1,18 @@
 import requests
 import csv, os
 import pandas as pd
+from datetime import datetime, timedelta
 from functools import cache
 
 from cagrx.utils import split_into_date_pairs
+from cagrx.exceptions import SchemeNotFoundError, MultipleSchemesFoundError
+from cagrx.return_metrics import (
+    cagr as cagr_fn,
+    calculate_trailing_cagr,
+    calculate_rolling_returns,
+    calculate_sip_returns,
+)
+from cagrx.risk_metrics import calculate_drawdown
 
 SCHEMES_URL = "https://www.amfiindia.com/spages/NAVAll.txt"
 NAV_HISTORY_URL = "https://www.amfiindia.com/api/nav-history"
@@ -71,6 +80,295 @@ class Amfi:
             nav_records.extend(records)
 
         return self._create_dataframe(nav_records)
+
+    get_historical_nav = get_nav_history
+
+    def _match_schemes(
+        self,
+        query: str,
+        plan: str | None = None,
+        option: str | None = None,
+        fund_house: str | None = None,
+    ) -> pd.DataFrame:
+        """
+        Internal helper to match and filter schemes by query string, code, plan, option, and fund house.
+
+        :param query: Keyword string or scheme code to search for
+        :param plan: Optional plan filter (e.g. "direct" or "regular")
+        :param option: Optional option filter (e.g. "growth" or "idcw")
+        :param fund_house: Optional fund house filter
+        :returns: Filtered DataFrame of matching schemes
+        """
+        query_str = str(query).strip()
+        df = self.schemes_list
+
+        # 1. Exact scheme code match
+        code_match = df[df["scheme_code"].astype(str) == query_str]
+        if not code_match.empty:
+            return code_match
+
+        # 2. Token-based search across scheme_name
+        tokens = query_str.lower().split()
+        if not tokens:
+            return df.iloc[0:0]
+
+        mask = pd.Series(True, index=df.index)
+        names_lower = df["scheme_name"].astype(str).str.lower()
+        for token in tokens:
+            mask = mask & names_lower.str.contains(token, regex=False, na=False)
+
+        matches = df[mask]
+
+        # 3. Apply optional filters
+        if fund_house:
+            matches = matches[
+                matches["fund_house"].astype(str).str.lower().str.contains(fund_house.lower(), regex=False, na=False)
+            ]
+
+        if plan:
+            matches = matches[
+                matches["plan"].astype(str).str.lower().str.contains(plan.lower(), regex=False, na=False)
+            ]
+
+        if option:
+            matches = matches[
+                matches["option"].astype(str).str.lower().str.contains(option.lower(), regex=False, na=False)
+            ]
+
+        return matches
+
+    def search_schemes(
+        self,
+        query: str,
+        limit: int | None = 10,
+        plan: str | None = None,
+        option: str | None = None,
+        fund_house: str | None = None,
+    ) -> list[dict]:
+        """
+        Search for mutual fund schemes matching a query string or scheme code.
+
+        :param query: Keyword string or scheme code to search for
+        :param limit: Maximum number of matches to return (default: 10, None for all)
+        :param plan: Optional plan filter (e.g. "direct" or "regular")
+        :param option: Optional option filter (e.g. "growth" or "idcw")
+        :param fund_house: Optional fund house filter
+        :returns: List of scheme dictionaries
+        """
+        if not query or not str(query).strip():
+            return []
+
+        matches = self._match_schemes(query, plan=plan, option=option, fund_house=fund_house)
+
+        if limit is not None and limit > 0:
+            matches = matches.head(limit)
+
+        return matches.to_dict(orient="records")
+
+    def resolve_scheme(
+        self,
+        scheme: str | int,
+        plan: str | None = None,
+        option: str | None = None,
+    ) -> str:
+        """
+        Resolve a scheme code or scheme name to an exact AMFI scheme code string.
+
+        :param scheme: AMFI scheme code (e.g. "119551") or scheme name query (e.g. "Parag Parikh Flexi Cap")
+        :param plan: Optional plan filter (e.g. "direct", "regular")
+        :param option: Optional option filter (e.g. "growth", "idcw")
+        :returns: Exact scheme_code as a string (e.g. "119551")
+        :raises SchemeNotFoundError: If no scheme matches the input
+        :raises MultipleSchemesFoundError: If multiple schemes match and cannot be disambiguated
+        """
+        scheme_str = str(scheme).strip()
+
+        # 1. Check exact scheme code match in AMFI database
+        code_match = self.schemes_list[self.schemes_list["scheme_code"].astype(str) == scheme_str]
+        if not code_match.empty:
+            return scheme_str
+
+        # If scheme was all numeric digits but not found in the table:
+        if scheme_str.isdigit():
+            raise SchemeNotFoundError(
+                f"Scheme code '{scheme_str}' was not found in the AMFI scheme database. "
+                "Call amfi.refresh_schemes() to update the local cache."
+            )
+
+        # 2. Check base matches without plan/option to detect existence
+        base_matches = self._match_schemes(scheme_str)
+        if base_matches.empty:
+            raise SchemeNotFoundError(
+                f"No schemes found matching '{scheme_str}'. "
+                "Try a broader keyword or use amfi.search_schemes() to explore available funds."
+            )
+
+        # 3. Check for exact full name match (case-insensitive)
+        names_lower = base_matches["scheme_name"].astype(str).str.lower()
+        exact_name_match = base_matches[names_lower == scheme_str.lower()]
+        if len(exact_name_match) == 1:
+            return str(exact_name_match.iloc[0]["scheme_code"])
+
+        # 4. Filter with plan and option
+        filtered_matches = self._match_schemes(scheme_str, plan=plan, option=option)
+
+        if filtered_matches.empty:
+            raise SchemeNotFoundError(
+                f"Found schemes matching '{scheme_str}', but none matched plan='{plan}' and option='{option}'."
+            )
+
+        if len(filtered_matches) == 1:
+            return str(filtered_matches.iloc[0]["scheme_code"])
+
+        # Multiple matches remain
+        match_records = filtered_matches.to_dict(orient="records")
+        raise MultipleSchemesFoundError(query=scheme_str, matches=match_records)
+
+    def get_scheme_info(
+        self,
+        scheme: str | int,
+        plan: str | None = None,
+        option: str | None = None,
+    ) -> dict:
+        """
+        Get metadata for a single scheme by code or name.
+        """
+        scheme_code = self.resolve_scheme(scheme, plan=plan, option=option)
+        row = self.schemes_list[self.schemes_list["scheme_code"].astype(str) == str(scheme_code)]
+        if not row.empty:
+            return row.iloc[0].to_dict()
+        raise SchemeNotFoundError(f"Scheme code '{scheme_code}' not found.")
+
+    def cagr(
+        self,
+        scheme: str | int,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        plan: str | None = None,
+        option: str | None = None,
+        column: str = "nav",
+    ) -> float:
+        """
+        Calculate CAGR for a scheme by code or name.
+        """
+        scheme_code = self.resolve_scheme(scheme, plan=plan, option=option)
+        end_date = end_date or datetime.today().strftime("%Y-%m-%d")
+        start_date = start_date or "1990-01-01"
+        nav_df = self.get_nav_history(scheme_code, start_date, end_date)
+        if nav_df.empty:
+            raise ValueError(f"No NAV data found for scheme {scheme_code} between {start_date} and {end_date}")
+        return cagr_fn(nav_df, column=column)
+
+    def trailing_cagr(
+        self,
+        scheme: str | int,
+        periods: list[int] | None = None,
+        end_date: str | None = None,
+        plan: str | None = None,
+        option: str | None = None,
+        column: str = "nav",
+    ) -> dict:
+        """
+        Calculate trailing CAGR (e.g. 1Y, 3Y, 5Y) for a scheme by code or name.
+        """
+        if periods is None:
+            periods = [1, 3, 5]
+        scheme_code = self.resolve_scheme(scheme, plan=plan, option=option)
+        end_date = end_date or datetime.today().strftime("%Y-%m-%d")
+        positive_periods = [p for p in periods if p > 0]
+        max_period = max(positive_periods) if positive_periods else 5
+        if -1 in periods:
+            start_date = "1990-01-01"
+        else:
+            start_dt = datetime.strptime(end_date, "%Y-%m-%d") - timedelta(days=int((max_period + 0.5) * 365.25))
+            start_date = start_dt.strftime("%Y-%m-%d")
+        nav_df = self.get_nav_history(scheme_code, start_date, end_date)
+        if nav_df.empty:
+            raise ValueError(f"No NAV data found for scheme {scheme_code} between {start_date} and {end_date}")
+        return calculate_trailing_cagr(nav_df, column=column, periods=periods)
+
+    def rolling_returns(
+        self,
+        scheme: str | int,
+        period: pd.DateOffset | None = None,
+        years: int | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        plan: str | None = None,
+        option: str | None = None,
+        column: str = "nav",
+    ) -> dict:
+        """
+        Calculate rolling returns for a scheme by code or name.
+        Accepts either period=pd.DateOffset(years=3) or years=3.
+        """
+        scheme_code = self.resolve_scheme(scheme, plan=plan, option=option)
+        if years is not None:
+            offset_period = pd.DateOffset(years=years)
+        elif period is None:
+            offset_period = pd.DateOffset(years=1)
+        elif isinstance(period, int):
+            offset_period = pd.DateOffset(years=period)
+        else:
+            offset_period = period
+
+        n_years = offset_period.kwds.get('years', 1) if hasattr(offset_period, 'kwds') else 1
+        end_date = end_date or datetime.today().strftime("%Y-%m-%d")
+        if start_date is None:
+            fetch_years = max(n_years + 3, 5)
+            start_dt = datetime.strptime(end_date, "%Y-%m-%d") - timedelta(days=int((fetch_years + 0.5) * 365.25))
+            start_date = start_dt.strftime("%Y-%m-%d")
+        nav_df = self.get_nav_history(scheme_code, start_date, end_date)
+        if nav_df.empty:
+            raise ValueError(f"No NAV data found for scheme {scheme_code} between {start_date} and {end_date}")
+        return calculate_rolling_returns(nav_df, column=column, period=offset_period)
+
+    def drawdown(
+        self,
+        scheme: str | int,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        plan: str | None = None,
+        option: str | None = None,
+        round_digits: int = 3,
+        column: str = "nav",
+    ) -> dict:
+        """
+        Calculate maximum drawdown and recovery for a scheme by code or name.
+        """
+        scheme_code = self.resolve_scheme(scheme, plan=plan, option=option)
+        end_date = end_date or datetime.today().strftime("%Y-%m-%d")
+        start_date = start_date or "2000-01-01"
+        nav_df = self.get_nav_history(scheme_code, start_date, end_date)
+        if nav_df.empty:
+            raise ValueError(f"No NAV data found for scheme {scheme_code} between {start_date} and {end_date}")
+        return calculate_drawdown(nav_df, column=column, round_digits=round_digits)
+
+    max_drawdown = drawdown
+
+    def sip_returns(
+        self,
+        scheme: str | int,
+        monthly_amount: float,
+        start_date: str,
+        end_date: str | None = None,
+        plan: str | None = None,
+        option: str | None = None,
+        column: str = "nav",
+    ) -> dict:
+        """
+        Calculate SIP returns for a scheme by code or name.
+        """
+        scheme_code = self.resolve_scheme(scheme, plan=plan, option=option)
+        end_date = end_date or datetime.today().strftime("%Y-%m-%d")
+        nav_df = self.get_nav_history(scheme_code, start_date, end_date)
+        if nav_df.empty:
+            raise ValueError(f"No NAV data found for scheme {scheme_code} between {start_date} and {end_date}")
+        sip_dates = pd.date_range(start=start_date, end=end_date, freq='MS')
+        sip_cashflows = pd.DataFrame({'amount': monthly_amount}, index=sip_dates)
+        return calculate_sip_returns(sip_cashflows, nav_df, column=column)
+
+    calculate_sip = sip_returns
 
     _SCHEME_COLUMNS = ["scheme_code", "isin_growth", "isin_reinv", "scheme_name", "plan", "option", "nav", "date", "fund_house"]
 
@@ -173,10 +471,15 @@ class Amfi:
 
     def _load_schemes(self):
         """
-        Load schemes list from cache if available, otherwise sync from AMFI
+        Load schemes list from cache if available and valid, otherwise sync from AMFI
         """
         if os.path.exists(self.cache_file):
-            return pd.read_csv(self.cache_file)
+            try:
+                df = pd.read_csv(self.cache_file)
+                if not df.empty and "scheme_code" in df.columns:
+                    return df
+            except Exception:
+                pass
         
         return self.refresh_schemes()
         

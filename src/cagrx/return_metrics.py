@@ -40,11 +40,21 @@ def calculate_trailing_cagr(df, column="nav", periods=None):
         periods = [1, 3, 5] 
     
     df = df.sort_index()
+    if not isinstance(df.index, pd.DatetimeIndex):
+        df = df.copy()
+        df.index = pd.to_datetime(df.index)
+
     cagr_metrics = {}
 
     for period in periods:
         if period == -1:
-            cagr_metrics[f'Max_CAGR'] = cagr(df, column=column)
+            start_dt = df.index[0]
+            end_dt = df.index[-1]
+            num_years = round((end_dt - start_dt).days / 365.25, 2)
+            cagr_metrics['Max_CAGR'] = cagr(df, column=column)
+            cagr_metrics['Max_CAGR_start_date'] = start_dt.strftime("%Y-%m-%d")
+            cagr_metrics['Max_CAGR_end_date'] = end_dt.strftime("%Y-%m-%d")
+            cagr_metrics['Max_CAGR_years'] = num_years
             continue
         
         start_date = df.index[-1] - pd.DateOffset(years=period)
@@ -262,3 +272,11 @@ def calculate_sip_returns(sip_cashflows, nav_df, column="nav"):
         'current_nav': round(current_nav, 2),
         'investment_period_days': (nav_df.index[-1] - sip_cashflows.index[0]).days if len(sip_cashflows) > 0 else 0
     }
+
+
+# Re-export from risk_metrics for convenience / backward-compatibility
+from cagrx.risk_metrics import (
+    calculate_drawdown,
+    calculate_max_drawdown,
+    max_drawdown,
+)

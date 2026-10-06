@@ -23,6 +23,7 @@
   - Trailing returns (1Y, 3Y, 5Y, etc.)
   - Rolling returns with max/min/average statistics
   - SIP (Systematic Investment Plan) return calculations
+  - Maximum Drawdown (MDD) and recovery tracking
 - **Data Persistence**: Automatic caching of schemes list for faster subsequent access
 
 ## 🚀 Installation
@@ -77,6 +78,41 @@ all_schemes = amfi.list_all_schemes()
 refreshed_schemes = amfi.refresh_schemes()
 ```
 
+### 🔍 Search & Scheme Resolution
+
+Search across all AMFI funds by keyword, code, plan, or option:
+
+```python
+# Search schemes by keywords
+matches = amfi.search_schemes("Parag Parikh Flexi", limit=5)
+
+# Resolve scheme code from fund name
+scheme_code = amfi.resolve_scheme("Parag Parikh Flexi Cap", plan="direct", option="growth")
+# Returns: "122639"
+```
+
+### ⚡ Scheme-Aware Analytics
+
+Calculate metrics directly using a scheme code or scheme name without manually downloading NAV DataFrames:
+
+```python
+# Trailing CAGR by fund name and plan/option
+trailing = amfi.trailing_cagr("Parag Parikh Flexi Cap", plan="direct", option="growth")
+print(trailing)
+
+# Rolling returns (pass years=3 or period=pd.DateOffset(years=3))
+rolling = amfi.rolling_returns("122639", years=3)
+print(rolling)
+
+# Maximum Drawdown and recovery timeline
+mdd = amfi.drawdown("122639")
+print(mdd)
+
+# SIP returns calculation
+sip = amfi.sip_returns("122639", monthly_amount=5000, start_date="2020-01-01")
+print(f"Invested: ₹{sip['total_invested']} -> Current: ₹{sip['current_value']}")
+```
+
 ### Download Historical NAV Data
 
 ```python
@@ -112,7 +148,16 @@ trailing_returns = calculate_trailing_cagr(
     periods=[-1, 1, 3, 5]  # -1 for Max CAGR, 1Y, 3Y, 5Y
 )
 print(trailing_returns)
-# Output: {'Max_CAGR': 0.165, '1Y_CAGR': 0.123, '3Y_CAGR': 0.156, '5Y_CAGR': 0.142}
+# Output:
+# {
+#     'Max_CAGR': 0.165,
+#     'Max_CAGR_start_date': '2013-05-24',
+#     'Max_CAGR_end_date': '2024-10-06',
+#     'Max_CAGR_years': 11.37,
+#     '1Y_CAGR': 0.123,
+#     '3Y_CAGR': 0.156,
+#     '5Y_CAGR': 0.142
+# }
 ```
 
 #### Rolling Returns
@@ -171,6 +216,25 @@ irregular_investments = pd.DataFrame({
 
 irregular_returns = calculate_sip_returns(irregular_investments, nav_data)
 print(f"Irregular Returns: {irregular_returns['return_percentage']:.2f}%")
+```
+
+#### Maximum Drawdown and Recovery
+
+Analyze peak-to-trough drops and recovery timelines:
+
+```python
+from cagrx.risk_metrics import calculate_drawdown
+
+drawdown = calculate_drawdown(nav_data)
+print(drawdown)
+# Output:
+# {
+#     "max_drawdown": -0.327,
+#     "drawdown_start": "2021-01-15",
+#     "drawdown_end": "2021-06-20",
+#     "recovery_date": "2022-02-10",
+#     "recovery_days": 235
+# }
 ```
 
 ### Complete Example
@@ -237,6 +301,7 @@ cagrx/
 │       ├── __init__.py          # Main package entry point
 │       ├── amfi.py              # AMFI data fetching and management
 │       ├── return_metrics.py    # Performance calculation utilities
+│       ├── risk_metrics.py      # Downside risk and drawdown calculations
 │       └── utils.py             # Helper functions
 ├── pyproject.toml               # Project configuration
 └── README.md                    # This file
