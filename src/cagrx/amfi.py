@@ -20,7 +20,7 @@ NAV_HISTORY_URL = "https://www.amfiindia.com/api/nav-history"
 class Amfi:
 
     def __init__(self):
-        self.cache_file = "amfi_navall.csv"
+        self.cache_file = os.path.expanduser("~/.cagrx/amfi_navall.csv")
         self.schemes_list = self._load_schemes()
         
     
@@ -45,6 +45,7 @@ class Amfi:
         Force refresh schemes list from AMFI and update cache.
         """
         self.schemes_list = self._get_schemes_from_amfi()
+        os.makedirs(os.path.dirname(self.cache_file), exist_ok=True)
         self.schemes_list.to_csv(self.cache_file, index=False)
         return self.schemes_list
 
@@ -163,6 +164,7 @@ class Amfi:
         if limit is not None and limit > 0:
             matches = matches.head(limit)
 
+        matches = matches.where(pd.notnull(matches), None)
         return matches.to_dict(orient="records")
 
     def resolve_scheme(
@@ -236,6 +238,7 @@ class Amfi:
         scheme_code = self.resolve_scheme(scheme, plan=plan, option=option)
         row = self.schemes_list[self.schemes_list["scheme_code"].astype(str) == str(scheme_code)]
         if not row.empty:
+            row = row.where(pd.notnull(row), None)
             return row.iloc[0].to_dict()
         raise SchemeNotFoundError(f"Scheme code '{scheme_code}' not found.")
 

@@ -20,7 +20,7 @@ def cagr(df, column="nav"):
         raise ValueError("Invalid data for CAGR calculation.")
     
     cagr = (end_value / start_value) ** (1 / num_years) - 1
-    return round(cagr, 3)
+    return float(round(cagr, 3))
 
 
 def calculate_trailing_cagr(df, column="nav", periods=None):
@@ -50,7 +50,7 @@ def calculate_trailing_cagr(df, column="nav", periods=None):
         if period == -1:
             start_dt = df.index[0]
             end_dt = df.index[-1]
-            num_years = round((end_dt - start_dt).days / 365.25, 2)
+            num_years = float(round((end_dt - start_dt).days / 365.25, 2))
             cagr_metrics['Max_CAGR'] = cagr(df, column=column)
             cagr_metrics['Max_CAGR_start_date'] = start_dt.strftime("%Y-%m-%d")
             cagr_metrics['Max_CAGR_end_date'] = end_dt.strftime("%Y-%m-%d")
@@ -263,14 +263,14 @@ def calculate_sip_returns(sip_cashflows, nav_df, column="nav"):
         annualized_return = None
 
     return {
-        'total_invested': round(total_invested, 2),
-        'current_value': round(current_value, 2),
-        'absolute_returns': round(absolute_returns, 2),
-        'return_percentage': round(return_percentage, 2),
-        'annualized_return (xirr %)': annualized_return,
-        'total_units': round(total_units, 4),
-        'current_nav': round(current_nav, 2),
-        'investment_period_days': (nav_df.index[-1] - sip_cashflows.index[0]).days if len(sip_cashflows) > 0 else 0
+        'total_invested': float(round(total_invested, 2)),
+        'current_value': float(round(current_value, 2)),
+        'absolute_returns': float(round(absolute_returns, 2)),
+        'return_percentage': float(round(return_percentage, 2)),
+        'annualized_return (xirr %)': float(annualized_return) if annualized_return is not None else None,
+        'total_units': float(round(total_units, 4)),
+        'current_nav': float(round(current_nav, 2)),
+        'investment_period_days': int((nav_df.index[-1] - sip_cashflows.index[0]).days) if len(sip_cashflows) > 0 else 0
     }
 
 
