@@ -445,6 +445,7 @@ class Amfi:
         parts = [p for p in [base_name, plan, option] if p and p != "-"]
         return " - ".join(parts) if parts else base_name
 
+    @cache
     def _fetch_historical_nav(self, scheme_id, from_date, to_date):
         """ 
         Actual method implementing the network/API call to the AMFI URL
