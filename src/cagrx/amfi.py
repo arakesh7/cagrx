@@ -12,7 +12,14 @@ from cagrx.return_metrics import (
     calculate_rolling_returns,
     calculate_sip_returns,
 )
-from cagrx.risk_metrics import calculate_drawdown
+from cagrx.risk_metrics import (
+    calculate_drawdown,
+    calculate_volatility,
+    calculate_sharpe_ratio,
+    calculate_sortino_ratio,
+    calculate_calmar_ratio,
+    calculate_consistency_metrics,
+)
 
 SCHEMES_URL = "https://www.amfiindia.com/spages/NAVAll.txt"
 NAV_HISTORY_URL = "https://www.amfiindia.com/api/nav-history"
@@ -372,6 +379,114 @@ class Amfi:
         return calculate_sip_returns(sip_cashflows, nav_df, column=column)
 
     calculate_sip = sip_returns
+
+    def volatility(
+        self,
+        scheme: str | int,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        plan: str | None = None,
+        option: str | None = None,
+        trading_days: int = 252,
+        round_digits: int = 4,
+        column: str = "nav",
+    ) -> float | None:
+        """Calculate annualized volatility for a scheme."""
+        scheme_code = self.resolve_scheme(scheme, plan=plan, option=option)
+        end_date = end_date or datetime.today().strftime("%Y-%m-%d")
+        start_date = start_date or "1990-01-01"
+        nav_df = self.get_nav_history(scheme_code, start_date, end_date)
+        if nav_df.empty:
+            raise ValueError(f"No NAV data found for scheme {scheme_code} between {start_date} and {end_date}")
+        return calculate_volatility(nav_df, column=column, trading_days=trading_days, round_digits=round_digits)
+
+    def sharpe_ratio(
+        self,
+        scheme: str | int,
+        risk_free_rate: float = 0.06,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        plan: str | None = None,
+        option: str | None = None,
+        trading_days: int = 252,
+        round_digits: int = 3,
+        column: str = "nav",
+    ) -> float | None:
+        """Calculate the annualized Sharpe Ratio for a scheme."""
+        scheme_code = self.resolve_scheme(scheme, plan=plan, option=option)
+        end_date = end_date or datetime.today().strftime("%Y-%m-%d")
+        start_date = start_date or "1990-01-01"
+        nav_df = self.get_nav_history(scheme_code, start_date, end_date)
+        if nav_df.empty:
+            raise ValueError(f"No NAV data found for scheme {scheme_code} between {start_date} and {end_date}")
+        return calculate_sharpe_ratio(nav_df, risk_free_rate=risk_free_rate, column=column, trading_days=trading_days, round_digits=round_digits)
+
+    def sortino_ratio(
+        self,
+        scheme: str | int,
+        risk_free_rate: float = 0.06,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        plan: str | None = None,
+        option: str | None = None,
+        trading_days: int = 252,
+        round_digits: int = 3,
+        column: str = "nav",
+    ) -> float | None:
+        """Calculate the annualized Sortino Ratio for a scheme."""
+        scheme_code = self.resolve_scheme(scheme, plan=plan, option=option)
+        end_date = end_date or datetime.today().strftime("%Y-%m-%d")
+        start_date = start_date or "1990-01-01"
+        nav_df = self.get_nav_history(scheme_code, start_date, end_date)
+        if nav_df.empty:
+            raise ValueError(f"No NAV data found for scheme {scheme_code} between {start_date} and {end_date}")
+        return calculate_sortino_ratio(nav_df, risk_free_rate=risk_free_rate, column=column, trading_days=trading_days, round_digits=round_digits)
+
+    def calmar_ratio(
+        self,
+        scheme: str | int,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        plan: str | None = None,
+        option: str | None = None,
+        round_digits: int = 3,
+        column: str = "nav",
+    ) -> float | None:
+        """Calculate the Calmar Ratio for a scheme."""
+        scheme_code = self.resolve_scheme(scheme, plan=plan, option=option)
+        end_date = end_date or datetime.today().strftime("%Y-%m-%d")
+        start_date = start_date or "1990-01-01"
+        nav_df = self.get_nav_history(scheme_code, start_date, end_date)
+        if nav_df.empty:
+            raise ValueError(f"No NAV data found for scheme {scheme_code} between {start_date} and {end_date}")
+        return calculate_calmar_ratio(nav_df, column=column, round_digits=round_digits)
+
+    def consistency_metrics(
+        self,
+        scheme: str | int,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        plan: str | None = None,
+        option: str | None = None,
+        resample_rule: str = "ME",
+        drop_incomplete: bool = True,
+        tolerance_days: int = 4,
+        column: str = "nav",
+    ) -> dict:
+        """Calculate consistency metrics (best/worst periods, hit rate) for a scheme."""
+        scheme_code = self.resolve_scheme(scheme, plan=plan, option=option)
+        end_date = end_date or datetime.today().strftime("%Y-%m-%d")
+        start_date = start_date or "1990-01-01"
+        nav_df = self.get_nav_history(scheme_code, start_date, end_date)
+        if nav_df.empty:
+            raise ValueError(f"No NAV data found for scheme {scheme_code} between {start_date} and {end_date}")
+        return calculate_consistency_metrics(
+            nav_df, 
+            column=column, 
+            resample_rule=resample_rule, 
+            drop_incomplete=drop_incomplete, 
+            tolerance_days=tolerance_days
+        )
 
     _SCHEME_COLUMNS = ["scheme_code", "isin_growth", "isin_reinv", "scheme_name", "plan", "option", "nav", "date", "fund_house"]
 

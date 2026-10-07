@@ -14,6 +14,11 @@ from cagrx.risk_metrics import (
     calculate_drawdown,
     calculate_max_drawdown,
     max_drawdown,
+    calculate_volatility,
+    calculate_sharpe_ratio,
+    calculate_sortino_ratio,
+    calculate_calmar_ratio,
+    calculate_consistency_metrics,
 )
 from cagrx.amfi import Amfi
 from cagrx.exceptions import SchemeNotFoundError, MultipleSchemesFoundError
@@ -236,3 +241,64 @@ class TestSchemeAwareAmfi(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestNewRiskMetrics(unittest.TestCase):
+    def setUp(self):
+        import numpy as np
+        self.returns = [0.01, 0.02, -0.01, 0.01, -0.02, 0.03, 0.01, -0.01, 0.02]
+        nav_values = [100.0]
+        for r in self.returns:
+            nav_values.append(nav_values[-1] * (1 + r))
+        self.df = pd.DataFrame(
+            {"nav": nav_values}, 
+            index=pd.date_range("2023-01-01", periods=10, freq="D")
+        )
+        self.ret_series = pd.Series(self.returns)
+
+    def test_volatility(self):
+        import numpy as np
+        vol = calculate_volatility(self.df, trading_days=252)
+        expected_vol = round(self.ret_series.std(ddof=1) * np.sqrt(252), 4)
+        self.assertAlmostEqual(vol, expected_vol, places=4)
+
+    def test_sharpe_ratio(self):
+        import numpy as np
+        rf = 0.06
+        sharpe = calculate_sharpe_ratio(self.df, risk_free_rate=rf, trading_days=252)
+        daily_rf = (1 + rf) ** (1/252) - 1
+        excess = self.ret_series - daily_rf
+        expected_sharpe = round((excess.mean() / excess.std(ddof=1)) * np.sqrt(252), 3)
+        self.assertAlmostEqual(sharpe, expected_sharpe, places=3)
+
+    def test_sortino_ratio(self):
+        import numpy as np
+        rf = 0.06
+        sortino = calculate_sortino_ratio(self.df, risk_free_rate=rf, trading_days=252)
+        daily_rf = (1 + rf) ** (1/252) - 1
+        excess = self.ret_series - daily_rf
+        downside = np.minimum(excess, 0.0)
+        downside_dev = np.sqrt((downside ** 2).mean())
+        expected_sortino = round((excess.mean() / downside_dev) * np.sqrt(252), 3)
+        self.assertAlmostEqual(sortino, expected_sortino, places=3)
+
+    def test_calmar_ratio(self):
+        calmar = calculate_calmar_ratio(self.df, round_digits=3)
+        self.assertIsNotNone(calmar)
+        self.assertGreater(calmar, 0)
+
+    def test_consistency_metrics(self):
+        dates = pd.date_range("2023-01-15", periods=60, freq="D")
+        nav_values = [100.0 + i for i in range(60)] # strictly positive returns
+        df = pd.DataFrame({"nav": nav_values}, index=dates)
+        
+        metrics = calculate_consistency_metrics(df, resample_rule="ME", drop_incomplete=False)
+        self.assertEqual(metrics["hit_rate"], 1.0)
+        self.assertTrue("best_period_date" in metrics)
+        self.assertEqual(metrics["positive_periods"], metrics["total_periods"])
+        
+        # Test with drop_incomplete=True
+        # Since the last date is 2023-03-15, it's far from the month-end (2023-03-31)
+        # It should drop the March period, and January is skipped as the first partial period.
+        metrics_dropped = calculate_consistency_metrics(df, resample_rule="ME", drop_incomplete=True, tolerance_days=4)
+        self.assertEqual(metrics_dropped["total_periods"], 1) # Only February is a complete period

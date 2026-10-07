@@ -10,6 +10,11 @@ from cagrx.risk_metrics import (
     calculate_drawdown,
     calculate_max_drawdown,
     max_drawdown,
+    calculate_volatility,
+    calculate_sharpe_ratio,
+    calculate_sortino_ratio,
+    calculate_calmar_ratio,
+    calculate_consistency_metrics,
 )
 from cagrx.exceptions import (
     CagrxError,
@@ -27,6 +32,11 @@ __all__ = [
     "calculate_drawdown",
     "calculate_max_drawdown",
     "max_drawdown",
+    "calculate_volatility",
+    "calculate_sharpe_ratio",
+    "calculate_sortino_ratio",
+    "calculate_calmar_ratio",
+    "calculate_consistency_metrics",
     "CagrxError",
     "SchemeNotFoundError",
     "MultipleSchemesFoundError",
