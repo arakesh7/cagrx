@@ -306,6 +306,7 @@ class Amfi:
         end_date: str | None = None,
         plan: str | None = None,
         option: str | None = None,
+        hurdle_rate: float = 0.08,
         column: str = "nav",
     ) -> dict:
         """
@@ -331,7 +332,7 @@ class Amfi:
         nav_df = self.get_nav_history(scheme_code, start_date, end_date)
         if nav_df.empty:
             raise ValueError(f"No NAV data found for scheme {scheme_code} between {start_date} and {end_date}")
-        return calculate_rolling_returns(nav_df, column=column, period=offset_period)
+        return calculate_rolling_returns(nav_df, column=column, period=offset_period, hurdle_rate=hurdle_rate)
 
     def drawdown(
         self,

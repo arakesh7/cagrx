@@ -222,6 +222,12 @@ class TestSchemeAwareAmfi(unittest.TestCase):
         self.assertIn('max_returns', result)
         self.assertIn('min_returns', result)
         self.assertIn('avg_return', result)
+        self.assertIn('median_return', result)
+        self.assertIn('p10_return', result)
+        self.assertIn('p90_return', result)
+        self.assertIn('pct_windows_negative', result)
+        self.assertIn('pct_windows_above_hurdle', result)
+        self.assertIn('total_windows', result)
 
     @patch.object(Amfi, 'get_nav_history')
     def test_scheme_aware_drawdown(self, mock_get_nav):
@@ -302,3 +308,41 @@ class TestNewRiskMetrics(unittest.TestCase):
         # It should drop the March period, and January is skipped as the first partial period.
         metrics_dropped = calculate_consistency_metrics(df, resample_rule="ME", drop_incomplete=True, tolerance_days=4)
         self.assertEqual(metrics_dropped["total_periods"], 1) # Only February is a complete period
+
+class TestRollingReturnsEnhancements(unittest.TestCase):
+    def setUp(self):
+        import numpy as np
+        dates = pd.date_range(start='2010-01-01', periods=2000, freq='D', name='date')
+        # Generate some synthetic NAV data
+        # We will create a steady 10% annual growth with some noise
+        np.random.seed(42)
+        daily_growth = (1.10) ** (1/365) - 1
+        noise = np.random.normal(0, 0.01, 2000)
+        returns = daily_growth + noise
+        navs = 100 * (1 + returns).cumprod()
+        self.df = pd.DataFrame({'nav': navs}, index=dates)
+
+    def test_calculate_rolling_returns_new_metrics(self):
+        # 1 year rolling window
+        result = calculate_rolling_returns(self.df, period=pd.DateOffset(years=1), hurdle_rate=0.08)
+        
+        self.assertIn('median_return', result)
+        self.assertIn('p10_return', result)
+        self.assertIn('p90_return', result)
+        self.assertIn('pct_windows_negative', result)
+        self.assertIn('pct_windows_above_hurdle', result)
+        self.assertIn('total_windows', result)
+        self.assertIn('hurdle_rate', result)
+        
+        self.assertEqual(result['hurdle_rate'], 0.08)
+        self.assertGreater(result['total_windows'], 1000)
+        
+        # Check ordering of percentiles
+        self.assertLess(result['p10_return'], result['median_return'])
+        self.assertLess(result['median_return'], result['p90_return'])
+        
+        # Check percentage bounds
+        self.assertGreaterEqual(result['pct_windows_negative'], 0.0)
+        self.assertLessEqual(result['pct_windows_negative'], 1.0)
+        self.assertGreaterEqual(result['pct_windows_above_hurdle'], 0.0)
+        self.assertLessEqual(result['pct_windows_above_hurdle'], 1.0)

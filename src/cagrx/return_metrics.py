@@ -69,7 +69,7 @@ def calculate_trailing_cagr(df, column="nav", periods=None):
     
     return cagr_metrics
     
-def calculate_rolling_returns(df, column="nav", period=pd.DateOffset(years=1)):
+def calculate_rolling_returns(df, column="nav", period=pd.DateOffset(years=1), hurdle_rate=0.08):
     """
     Calculate the rolling annualised CAGR for the given column over a sliding window.
 
@@ -109,6 +109,8 @@ def calculate_rolling_returns(df, column="nav", period=pd.DateOffset(years=1)):
         (rolling_df['nav_current'] / rolling_df['nav_past']) ** (1 / years) - 1
     ).round(4)
 
+    returns = rolling_df['returns']
+
     max_row = rolling_df.loc[rolling_df['returns'].idxmax()]
     min_row = rolling_df.loc[rolling_df['returns'].idxmin()]
     metrics = {
@@ -116,7 +118,14 @@ def calculate_rolling_returns(df, column="nav", period=pd.DateOffset(years=1)):
         'max_return_period': (str(max_row['past_date']), str(max_row.name)),
         'min_returns': float(min_row['returns']),
         'min_return_period': (str(min_row['past_date']), str(min_row.name)),
-        'avg_return': float(rolling_df['returns'].mean().round(4))
+        'avg_return': float(returns.mean().round(4)),
+        'median_return': float(round(returns.median(), 4)),
+        'p10_return': float(round(returns.quantile(0.10), 4)),
+        'p90_return': float(round(returns.quantile(0.90), 4)),
+        'pct_windows_negative': float(round((returns < 0).mean(), 4)),
+        'hurdle_rate': hurdle_rate,
+        'pct_windows_above_hurdle': float(round((returns > hurdle_rate).mean(), 4)),
+        'total_windows': int(returns.count()),
     }
 
     return metrics
@@ -279,4 +288,4 @@ from cagrx.risk_metrics import (
     calculate_drawdown,
     calculate_max_drawdown,
     max_drawdown,
-)
+)
