@@ -44,7 +44,7 @@ def _round_or_none(value, round_digits):
 # Drawdown
 # ---------------------------------------------------------------------------
 
-def calculate_drawdown(df, column="nav", round_digits=3):
+def calculate_drawdown(df, column="nav", top_n=3, round_digits=3):
     """
     Maximum drawdown and recovery details.
 
@@ -54,6 +54,9 @@ def calculate_drawdown(df, column="nav", round_digits=3):
         - 'drawdown_end': "YYYY-MM-DD" (trough date)
         - 'recovery_date': "YYYY-MM-DD" or None
         - 'recovery_days': int (calendar days trough -> recovery) or None
+        - 'current_drawdown': float (drawdown from latest peak to current day)
+        - 'ulcer_index': float (measure of depth and duration of drawdowns)
+        - 'top_drawdowns': list of dicts (up to top_n distinct drawdown episodes)
     """
     nav = _prepare_series(df, column)
 
@@ -65,43 +68,73 @@ def calculate_drawdown(df, column="nav", round_digits=3):
     cummax = nav.cummax()
     drawdown = (nav - cummax) / cummax
 
-    min_dd = drawdown.min()
-    if min_dd >= 0:
+    current_dd = _round_or_none(drawdown.iloc[-1], round_digits)
+    ulcer_index = (_round_or_none(np.sqrt(((drawdown * 100) ** 2).mean()), round_digits) / 100)
+
+    df_dd = pd.DataFrame({'nav': nav, 'cummax': cummax, 'drawdown': drawdown})
+    episodes = []
+    
+    for _, group in df_dd.groupby('cummax'):
+        depth = group['drawdown'].min()
+        if depth < 0:
+            trough_date = group['drawdown'].idxmin()
+            pre_trough = group.loc[:trough_date]
+            peaks = pre_trough[pre_trough['drawdown'] == 0]
+            peak_date = peaks.index[-1] if not peaks.empty else group.index[0]
+            
+            post_trough = group.loc[group.index > trough_date]
+            recoveries = post_trough[post_trough['drawdown'] == 0]
+            
+            if not recoveries.empty:
+                recovery_date = recoveries.index[0]
+            else:
+                group_end = group.index[-1]
+                future_data = nav.loc[nav.index > group_end]
+                if not future_data.empty:
+                    recovery_date = future_data.index[0]
+                else:
+                    recovery_date = None
+                    
+            if recovery_date is not None:
+                recovery_days = int((recovery_date - trough_date).days)
+                recovery_date_str = recovery_date.strftime("%Y-%m-%d")
+            else:
+                recovery_date_str = None
+                recovery_days = None
+                
+            episodes.append({
+                'max_drawdown': _round_or_none(depth, round_digits),
+                'drawdown_start': peak_date.strftime("%Y-%m-%d"),
+                'drawdown_end': trough_date.strftime("%Y-%m-%d"),
+                'recovery_date': recovery_date_str,
+                'recovery_days': recovery_days
+            })
+
+    episodes.sort(key=lambda x: x['max_drawdown'])
+    top_episodes = episodes[:top_n]
+
+    if not episodes:
         return {
             "max_drawdown": 0.0,
             "drawdown_start": None,
             "drawdown_end": None,
             "recovery_date": None,
             "recovery_days": None,
+            "current_drawdown": current_dd,
+            "ulcer_index": ulcer_index,
+            "top_drawdowns": []
         }
 
-    trough_date = drawdown.idxmin()
-    peak_val = cummax.loc[trough_date]
-
-    pre_trough = nav.loc[:trough_date]
-    peak_date = pre_trough[pre_trough == peak_val].index[-1]
-
-    post_trough = nav.loc[nav.index > trough_date]
-    recovered = post_trough[post_trough >= peak_val]
-
-    if not recovered.empty:
-        recovery_date = recovered.index[0]
-        recovery_days = int((recovery_date - trough_date).days)
-        recovery_date_str = recovery_date.strftime("%Y-%m-%d")
-    else:
-        recovery_date_str = None
-        recovery_days = None
-
-    max_dd_val = float(min_dd)
-    if round_digits is not None:
-        max_dd_val = round(max_dd_val, round_digits)
-
+    worst = top_episodes[0]
     return {
-        "max_drawdown": max_dd_val,
-        "drawdown_start": peak_date.strftime("%Y-%m-%d"),
-        "drawdown_end": trough_date.strftime("%Y-%m-%d"),
-        "recovery_date": recovery_date_str,
-        "recovery_days": recovery_days,
+        "max_drawdown": worst["max_drawdown"],
+        "drawdown_start": worst["drawdown_start"],
+        "drawdown_end": worst["drawdown_end"],
+        "recovery_date": worst["recovery_date"],
+        "recovery_days": worst["recovery_days"],
+        "current_drawdown": current_dd,
+        "ulcer_index": ulcer_index,
+        "top_drawdowns": top_episodes
     }
 
 

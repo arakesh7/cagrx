@@ -107,10 +107,10 @@ class TestRiskMetrics(unittest.TestCase):
             "recovery_date": "2022-02-10",
             "recovery_days": 235,
         }
-        self.assertEqual(result, expected)
+        for k, v in expected.items(): self.assertEqual(result[k], v)
         # Check aliases
-        self.assertEqual(calculate_max_drawdown(dd_df), expected)
-        self.assertEqual(max_drawdown(dd_df), expected)
+        for k, v in expected.items(): self.assertEqual(calculate_max_drawdown(dd_df)[k], v)
+        for k, v in expected.items(): self.assertEqual(max_drawdown(dd_df)[k], v)
 
     def test_drawdown_unrecovered(self):
         dates = pd.to_datetime(['2021-01-15', '2021-06-20', '2021-09-01'])
