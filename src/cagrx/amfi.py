@@ -489,6 +489,150 @@ class Amfi:
             tolerance_days=tolerance_days
         )
 
+    # ------------------------------------------------------------------
+    # Metric dispatch helper (used by compare_funds)
+    # ------------------------------------------------------------------
+
+    _DEFAULT_METRICS = [
+        "cagr", "volatility", "sharpe_ratio",
+        "sortino_ratio", "calmar_ratio", "max_drawdown",
+    ]
+
+    def _compute_metric(
+        self,
+        metric: str,
+        nav_df: pd.DataFrame,
+        *,
+        risk_free_rate: float,
+        trading_days: int,
+        round_digits: int,
+        column: str,
+    ) -> float | None:
+        """
+        Compute a single named metric on a NAV DataFrame.
+
+        :param metric: One of the supported metric names (see _DEFAULT_METRICS).
+        :param nav_df: DataFrame with a DatetimeIndex and a NAV column.
+        :returns: The computed value, or None on failure.
+        """
+        if metric == "cagr":
+            return round(cagr_fn(nav_df, column=column), round_digits)
+        if metric == "volatility":
+            return calculate_volatility(
+                nav_df, column=column,
+                trading_days=trading_days, round_digits=round_digits,
+            )
+        if metric == "sharpe_ratio":
+            return calculate_sharpe_ratio(
+                nav_df, risk_free_rate=risk_free_rate, column=column,
+                trading_days=trading_days, round_digits=round_digits,
+            )
+        if metric == "sortino_ratio":
+            return calculate_sortino_ratio(
+                nav_df, risk_free_rate=risk_free_rate, column=column,
+                trading_days=trading_days, round_digits=round_digits,
+            )
+        if metric == "calmar_ratio":
+            return calculate_calmar_ratio(
+                nav_df, column=column, round_digits=round_digits,
+            )
+        if metric == "max_drawdown":
+            dd = calculate_drawdown(nav_df, column=column, round_digits=round_digits)
+            return dd["max_drawdown"] if dd else None
+        if metric == "p10_drawdown":
+            dd = calculate_drawdown(nav_df, column=column, round_digits=round_digits)
+            return dd["p10_drawdown"] if dd else None
+        if metric == "p90_drawdown":
+            dd = calculate_drawdown(nav_df, column=column, round_digits=round_digits)
+            return dd["p90_drawdown"] if dd else None
+        return None
+
+    # ------------------------------------------------------------------
+    # Fund comparison
+    # ------------------------------------------------------------------
+
+    def compare_funds(
+        self,
+        schemes: list[str | int],
+        start_date: str | None = None,
+        end_date: str | None = None,
+        plan: str | None = None,
+        option: str | None = None,
+        metrics: list[str] | None = None,
+        risk_free_rate: float = 0.06,
+        trading_days: int = 252,
+        round_digits: int = 3,
+        column: str = "nav",
+    ) -> pd.DataFrame:
+        """
+        Compare multiple funds across various return and risk metrics.
+
+        :param schemes: List of scheme codes or names to compare.
+        :param start_date: Start date for the comparison period (YYYY-MM-DD).
+        :param end_date: End date for the comparison period (YYYY-MM-DD).
+        :param plan: Optional plan filter passed to resolve_scheme (e.g. "direct", "regular").
+        :param option: Optional option filter passed to resolve_scheme (e.g. "growth", "idcw").
+        :param metrics: List of metric names to compute. Defaults to _DEFAULT_METRICS.
+        :param risk_free_rate: Risk-free rate for Sharpe and Sortino ratios.
+        :param trading_days: Number of trading days in a year.
+        :param round_digits: Number of decimal places to round the results to.
+        :param column: The column containing NAV data.
+        :returns: A pandas DataFrame with one row per scheme and one column per metric,
+                  plus a 'scheme_code' column.  Indexed by scheme name.
+        """
+        if metrics is None:
+            metrics = list(self._DEFAULT_METRICS)
+
+        end_date_str = end_date or datetime.today().strftime("%Y-%m-%d")
+        start_date_str = start_date or "1990-01-01"
+
+        results = []
+        for scheme in schemes:
+            # --- resolve scheme code & name ---
+            try:
+                scheme_code = self.resolve_scheme(scheme, plan=plan, option=option)
+                scheme_info = self.get_scheme_info(scheme_code)
+                scheme_name = scheme_info["scheme_name"] if scheme_info else str(scheme)
+            except Exception:
+                scheme_name = str(scheme)
+                scheme_code = None
+
+            row: dict = {"scheme_code": scheme_code, "Scheme Name": scheme_name}
+
+            # If resolution failed, fill metrics with None
+            if scheme_code is None:
+                row.update({m: None for m in metrics})
+                results.append(row)
+                continue
+
+            # --- fetch NAV history ---
+            try:
+                nav_df = self.get_nav_history(scheme_code, start_date_str, end_date_str)
+                if nav_df.empty:
+                    raise ValueError("No NAV data")
+            except Exception:
+                row.update({m: None for m in metrics})
+                results.append(row)
+                continue
+
+            # --- compute each requested metric ---
+            for m in metrics:
+                try:
+                    row[m] = self._compute_metric(
+                        m, nav_df,
+                        risk_free_rate=risk_free_rate,
+                        trading_days=trading_days,
+                        round_digits=round_digits,
+                        column=column,
+                    )
+                except Exception:
+                    row[m] = None
+            results.append(row)
+
+        df = pd.DataFrame(results)
+        df.set_index("Scheme Name", inplace=True)
+        return df
+
     _SCHEME_COLUMNS = ["scheme_code", "isin_growth", "isin_reinv", "scheme_name", "plan", "option", "nav", "date", "fund_house"]
 
     def _get_schemes_from_amfi(self):
