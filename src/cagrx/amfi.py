@@ -1,6 +1,9 @@
 import requests
 import csv, os
 import pandas as pd
+from qdata.reader import DataReader
+from qdata.providers.amfi import AmfiProvider
+from qdata.sync import SyncEngine
 from datetime import datetime, timedelta
 from functools import cache
 
@@ -26,9 +29,11 @@ NAV_HISTORY_URL = "https://www.amfiindia.com/api/nav-history"
 
 class Amfi:
 
-    def __init__(self):
-        self.cache_file = os.path.expanduser("~/.cagrx/amfi_navall.csv")
-        self.schemes_list = self._load_schemes()
+    def __init__(self, auto_sync: bool = False, data_dir=None):
+        self.auto_sync = auto_sync
+        self.data_dir = data_dir
+        self.provider = AmfiProvider(data_dir=data_dir)
+        self.schemes_list = self.provider.list_all_schemes()
         
     
     def list_all_schemes(self):
@@ -51,9 +56,7 @@ class Amfi:
         """
         Force refresh schemes list from AMFI and update cache.
         """
-        self.schemes_list = self._get_schemes_from_amfi()
-        os.makedirs(os.path.dirname(self.cache_file), exist_ok=True)
-        self.schemes_list.to_csv(self.cache_file, index=False)
+        self.schemes_list = self.provider.refresh_schemes()
         return self.schemes_list
 
     def get_schemes_by_fund_house(self, fund_house):
@@ -63,31 +66,75 @@ class Amfi:
         :param fund_house: name of the fund house
         :returns: pandas dataframe containing scheme codes and names
         """
-        return self.schemes_list[self.schemes_list["fund_house"] == fund_house][['scheme_code', 'scheme_name']]
+        return self.provider.get_schemes_by_fund_house(fund_house)[['scheme_code', 'scheme_name']]
+
+    def _read_from_qdata(self, scheme_id_str: str, start_dt, end_dt) -> pd.DataFrame | None:
+        try:
+            return DataReader(data_dir=self.data_dir, layer="raw").load(
+                symbol=scheme_id_str,
+                timeframe="1d",
+                start=start_dt.to_pydatetime(),
+                end=end_dt.to_pydatetime()
+            )
+        except Exception:
+            return None
+
+    def _sync_qdata(self, scheme_id_str: str, start_dt, end_dt) -> pd.DataFrame | None:
+        engine = SyncEngine(data_dir=self.data_dir, providers=[self.provider], symbols=[scheme_id_str], timeframes=["1d"])
+        engine.run_sync()
+            
+
+    def _fetch_from_amfi_network(self, scheme_id_str: str, start_dt, end_dt) -> pd.DataFrame | None:
+        return self.provider.fetch(
+            symbol=scheme_id_str,
+            timeframe="1d",
+            start=start_dt.to_pydatetime(),
+            end=end_dt.to_pydatetime()
+        )
+
+    def _format_for_cagrx(self, df: pd.DataFrame) -> pd.DataFrame:
+        if df is None or df.empty:
+            return pd.DataFrame()
+
+        if 'ts' not in df.columns and df.index.name == 'ts':
+            df = df.reset_index()
+
+        df['ts'] = df['ts'].dt.tz_localize(None)
+        df['nav'] = df['close']
+        df['date'] = df['ts']
+        df = df.set_index('date')
+        return df[['nav']]
 
     def get_nav_history(self, scheme_id, start_date, end_date):
         """ 
         Download NAV data for a given mutual fund scheme within the date range
         
-        This method fetches the data in chunks of 5 years
-
-        :param start_date: start_date of the requested data period
-        :param end_date: end_date of the requested data period
-        :param scheme_id: scheme_id of the mutual fund for which the NAV should be fetched
-        :param freq: frequency of the data
-        
         :returns: pandas dataframe containing nav data
         """
-        
-        # AMFI allows maximum of five_years to be downloaded at a time
-        date_ranges = split_into_date_pairs(start_date, end_date, n_days=365 * 5) 
-        nav_records = []
+        start_dt = pd.to_datetime(start_date, utc=True)
+        end_dt = pd.to_datetime(end_date, utc=True)
+        scheme_id_str = str(scheme_id)
 
-        for from_date, to_date in date_ranges:
-            records = self._fetch_historical_nav(scheme_id, from_date, to_date)
-            nav_records.extend(records)
+        # 1. Attempt to read from fast local storage
+        df = self._read_from_qdata(scheme_id_str, start_dt, end_dt)
 
-        return self._create_dataframe(nav_records)
+        # 2. Check for missing or stale data
+        is_missing = df is None or df.empty
+        is_stale = False
+        if not is_missing:
+            # DataReader returns indexed 'ts'
+            is_stale = (end_dt - df.index.max()).days > 7
+
+        # 3. Fallback to network or sync if necessary
+        if is_missing or is_stale:
+            if self.auto_sync:
+                self._sync_qdata(scheme_id_str, start_dt, end_dt)
+                df = self._read_from_qdata(scheme_id_str, start_dt, end_dt)
+            else:
+                df = self._fetch_from_amfi_network(scheme_id_str, start_dt, end_dt)
+
+        # 4. Format canonical qdata dataframe into cagrx format
+        return self._format_for_cagrx(df)
 
     get_historical_nav = get_nav_history
 
